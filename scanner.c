@@ -14,7 +14,7 @@
 #define TIMEOUT_USEC 500000
 
 //Biggest reply we can read
-#define BUFFER_SIZE 1000
+#define BUFFER_SIZE 4096
 
 //The message sent to each port
 #define PROBE_MESSAGE "Hello World!"
@@ -98,7 +98,7 @@ int is_port_open(int sock, struct sockaddr_in server_addr, int port)
         }
 
                 //Wait for a reply, recvfrom() reports who sent it
-                bytes = recvfrom(sock, buffer, sizeof(buffer), 0,
+                bytes = recvfrom(sock, buffer, sizeof(buffer) -1, 0,
                                 (struct sockaddr *)&from_addr, &from_len);
 
                 if (bytes < 0) {
@@ -110,7 +110,17 @@ int is_port_open(int sock, struct sockaddr_in server_addr, int port)
                    from_addr.sin_port != server_addr.sin_port) {
                         continue;
                 }
-                //return 1 if a reply came from the port we asked
+                
+                // Add a string terminator so the reply can be printed safely.
+                if (bytes < BUFFER_SIZE) {
+                buffer[bytes] = '\0';
+                } else {
+                buffer[BUFFER_SIZE - 1] = '\0';
+                }
+
+                printf("\nReply from port %d:\n%s\n", port, buffer);
+
+                // Return 1 because this port answered.
                 return 1;
         }
 
