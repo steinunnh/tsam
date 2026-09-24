@@ -110,6 +110,18 @@ int is_port_open(int sock, struct sockaddr_in server_addr, int port)
                    from_addr.sin_port != server_addr.sin_port) {
                         continue;
                 }
+
+                printf("\nRaw reply from port %d (%d bytes):\n", port, bytes);
+
+                for (int i = 0; i < bytes; i++) {
+                printf("%02x ", (unsigned char)buffer[i]);
+
+                if ((i + 1) % 16 == 0) {
+                        printf("\n");
+                }
+                }
+
+                printf("\n");
                 
                 // Add a string terminator so the reply can be printed safely.
                 if (bytes < BUFFER_SIZE) {
