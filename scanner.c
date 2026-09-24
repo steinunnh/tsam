@@ -1,196 +1,221 @@
-#include <netinet/in.h>
 #include <arpa/inet.h>
+#include <netinet/in.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-#include <sys/time.h>
 #include <sys/socket.h>
+#include <sys/time.h>
+#include <unistd.h>
 
-//Number of times we send a probe to the same port before giving up.
+// Number of probes sent to a port before giving up.
 #define ATTEMPTS 3
 
-//How long we wait for a reply to a single probe, in microseconds
+// How long to wait for one reply, measured in microseconds.
 #define TIMEOUT_USEC 500000
 
-//Biggest reply we can read
+// Biggest reply the scanner can receive.
 #define BUFFER_SIZE 4096
 
-//The message sent to each port
+// Message sent to every port.
 #define PROBE_MESSAGE "Hello World!"
 
 
-/* Creating the udp socket
-Creates the socket and gives it a recived timeout, returns the socket descriptor or -1 on failure
-*/
-int crate_socket(void)
+/*
+ * Creates a UDP socket and gives it a receive timeout.
+ * Returns the socket descriptor, or -1 if something fails.
+ */
+int create_socket(void)
 {
-        int sock;
-        struct timeval timeout;
-        //adding UDP socket
-        sock = socket(AF_INET, SOCK_DGRAM, 0);
+    int sock;
+    struct timeval timeout;
 
-        //checking if it failed
-        if (sock < 0) {
-                perror("socket failed");
-                return -1;
-        }
+    // Create an IPv4 UDP socket.
+    sock = socket(AF_INET, SOCK_DGRAM, 0);
 
-        timeout.tv_sec = 0;
-        timeout.tv_usec = TIMEOUT_USEC;
+    if (sock < 0) {
+        perror("socket failed");
+        return -1;
+    }
 
-        //set the timeout and bail if it fails
-        if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO,
-                        &timeout, sizeof(timeout)) < 0) {
-                perror("setsockopt failed");
-                close(sock);
-                return -1;
-        }
+    // Set the amount of time recvfrom() is allowed to wait.
+    timeout.tv_sec = 0;
+    timeout.tv_usec = TIMEOUT_USEC;
 
-        return sock;
+    if (setsockopt(sock,
+                   SOL_SOCKET,
+                   SO_RCVTIMEO,
+                   &timeout,
+                   sizeof(timeout)) < 0) {
+        perror("setsockopt failed");
+        close(sock);
+        return -1;
+    }
 
-
-
-}
-/*the setup_server_address fills in the struct sockaddr_in which describes the server being scanned
-Returns 0 if succesfull else -1
-*/
-int setup_server_address(struct sockaddr_in *server_addr, const char *ip)
-{
-        //Clear the structure first
-        memset(server_addr, 0, sizeof(*server_addr));
-        //server_addr is a IPv4 address
-        server_addr->sin_family = AF_INET;
-
-        //inet_pton turns the text address into the binary form returns 1 if text is a valid address 
-        if (inet_pton(AF_INET, ip, &server_addr->sin_addr) != 1) {
-                return -1;
-        }
-
-        return 0;
-}
-
-/* Check if port are open and check if it answered, returns 1 if port answered else 0
-*/
-int is_port_open(int sock, struct sockaddr_in server_addr, int port)
-{
-        int attempt;
-
-        //htons converts the port number into network byte order
-        server_addr.sin_port = htons(port);
-
-        for (attempt = 0; attempt < ATTEMPTS; attempt++) {
-                //holds the reply
-                char buffer[BUFFER_SIZE];
-                //who the reply came from
-                struct sockaddr_in from_addr;
-                //size of the record
-                socklen_t from_len = sizeof(from_addr);
-                //how many bytes recived
-                int bytes;
-
-                //UDP has no connection so the destination is given to sendto()
-                if (sendto(sock, PROBE_MESSAGE, strlen(PROBE_MESSAGE), 0,
-                                (struct sockaddr *)&server_addr,
-                                sizeof(server_addr)) < 0) {
-                        perror("sendto failed");
-                        continue;
-        }
-
-                //Wait for a reply, recvfrom() reports who sent it
-                bytes = recvfrom(sock, buffer, sizeof(buffer) -1, 0,
-                                (struct sockaddr *)&from_addr, &from_len);
-
-                if (bytes < 0) {
-                        continue;   //the timeout expired with no reply 
-                }
-
-                //ignore replies that did not come from the port we probed
-                if (from_addr.sin_addr.s_addr != server_addr.sin_addr.s_addr || 
-                   from_addr.sin_port != server_addr.sin_port) {
-                        continue;
-                }
-
-                printf("\nRaw reply from port %d (%d bytes):\n", port, bytes);
-
-                for (int i = 0; i < bytes; i++) {
-                printf("%02x ", (unsigned char)buffer[i]);
-
-                if ((i + 1) % 16 == 0) {
-                        printf("\n");
-                }
-                }
-
-                printf("\n");
-                
-                // Add a string terminator so the reply can be printed safely.
-                if (bytes < BUFFER_SIZE) {
-                buffer[bytes] = '\0';
-                } else {
-                buffer[BUFFER_SIZE - 1] = '\0';
-                }
-
-                printf("\nReply from port %d:\n%s\n", port, buffer);
-
-                // Return 1 because this port answered.
-                return 1;
-        }
-
-        return 0;
+    return sock;
 }
 
 
-/*Main 
-Reads and checks the command line arguments, 
-sets up the socket and the server address, 
-then tests every port in the range and prints the ones that answer
-*/
+/*
+ * Fills in the sockaddr_in structure that describes the server.
+ * Returns 0 on success, or -1 if the IP address is invalid.
+ */
+int setup_server_address(struct sockaddr_in *server_addr,
+                         const char *ip)
+{
+    // Clear the structure before filling it in.
+    memset(server_addr, 0, sizeof(*server_addr));
 
+    // The server uses an IPv4 address.
+    server_addr->sin_family = AF_INET;
+
+    // Convert the text IP address into its binary form.
+    if (inet_pton(AF_INET, ip, &server_addr->sin_addr) != 1) {
+        return -1;
+    }
+
+    return 0;
+}
+
+
+/*
+ * Converts a port argument from text into an integer.
+ * Returns 0 on success, or -1 if the argument is not a valid port.
+ */
+int parse_port(const char *text, int *port)
+{
+    char *end;
+    long value;
+
+    value = strtol(text, &end, 10);
+
+    // Reject empty input, extra characters, and values outside the range.
+    if (end == text || *end != '\0' || value < 1 || value > 65535) {
+        return -1;
+    }
+
+    *port = (int)value;
+    return 0;
+}
+
+
+/*
+ * Sends probes to one UDP port and waits for a reply.
+ * Returns 1 if the port answers, or 0 if no reply is received.
+ */
+int is_port_open(int sock,
+                 struct sockaddr_in server_addr,
+                 int port)
+{
+    int attempt;
+
+    // Convert the port into network byte order.
+    server_addr.sin_port = htons((uint16_t)port);
+
+    for (attempt = 0; attempt < ATTEMPTS; attempt++) {
+        char buffer[BUFFER_SIZE];
+        struct sockaddr_in from_addr;
+        socklen_t from_length = sizeof(from_addr);
+        ssize_t bytes_received;
+
+        /*
+         * UDP does not create a connection, so sendto() receives the
+         * destination address with every message.
+         */
+        if (sendto(sock,
+                   PROBE_MESSAGE,
+                   strlen(PROBE_MESSAGE),
+                   0,
+                   (struct sockaddr *)&server_addr,
+                   sizeof(server_addr)) < 0) {
+            perror("sendto failed");
+            continue;
+        }
+
+        // Wait for a reply and record which address sent it.
+        bytes_received = recvfrom(sock,
+                                  buffer,
+                                  sizeof(buffer) - 1,
+                                  0,
+                                  (struct sockaddr *)&from_addr,
+                                  &from_length);
+
+        if (bytes_received < 0) {
+            // The timeout expired, so try the same port again.
+            continue;
+        }
+
+        // Ignore replies that did not come from the port being tested.
+        if (from_addr.sin_addr.s_addr !=
+                server_addr.sin_addr.s_addr ||
+            from_addr.sin_port != server_addr.sin_port) {
+            continue;
+        }
+
+        // Add a string terminator so the reply can be printed safely.
+        buffer[bytes_received] = '\0';
+
+        printf("\nReply from port %d:\n%s\n", port, buffer);
+
+        // The correct server port answered the probe.
+        return 1;
+    }
+
+    // None of the attempts received a matching reply.
+    return 0;
+}
+
+
+/*
+ * Main:
+ *
+ * Checks the command-line arguments, creates the socket, and tests every
+ * port in the requested range. Ports that answer are printed to the screen.
+ */
 int main(int argc, char *argv[])
 {
-        struct sockaddr_in server_addr;
-        int low_port, high_port, sock, port;
+    struct sockaddr_in server_addr;
+    int low_port;
+    int high_port;
+    int sock;
+    int port;
 
-        if (argc != 4) {
-                printf("Error: wrong number of arguments.\n");
-                printf("Usage: %s <IP address> <low port> <high port>\n", argv[0]);
-                return 1;
-        }
-        //converts the port input from string into int
-        low_port = atoi(argv[2]);
-        high_port = atoi(argv[3]);
+    // The program requires an IP address and two port numbers.
+    if (argc != 4) {
+        fprintf(stderr, "Error: wrong number of arguments.\n");
+        fprintf(stderr,
+                "Usage: %s <IP address> <low port> <high port>\n",
+                argv[0]);
+        return 1;
+    }
 
-        //Checks if the ports are within permitted range
-        if (low_port < 1 || high_port > 65535 || low_port > high_port) {
-                printf("Invalid port range\n");
-                return 1;
-        }
+    // Convert and validate both port arguments.
+    if (parse_port(argv[2], &low_port) < 0 ||
+        parse_port(argv[3], &high_port) < 0 ||
+        low_port > high_port) {
+        fprintf(stderr, "Invalid port range\n");
+        return 1;
+    }
 
-        //Fill in the struct that holds the servers IP address so its ready to be passed to sendto() later
-        if (setup_server_address(&server_addr, argv[1]) < 0) {
-                printf("Invalid IP address\n");
-                return 1;
-        }
+    // Prepare the server's IPv4 address.
+    if (setup_server_address(&server_addr, argv[1]) < 0) {
+        fprintf(stderr, "Invalid IP address\n");
+        return 1;
+    }
 
-        sock = crate_socket();
-        if (sock < 0) {
-                return 1;
-        }
-        
-        //Work through the ports and printing those who answer
-        for (port = low_port; port <= high_port; port++) {
-                if (is_port_open(sock, server_addr, port) == 1) {
-                        printf("Port %d is open\n", port);
-                }
-        }
+    // Create the UDP socket used for all probes.
+    sock = create_socket();
 
-        close(sock);
-        return 0;
+    if (sock < 0) {
+        return 1;
+    }
+
+    // Test every port in the requested range.
+    for (port = low_port; port <= high_port; port++) {
+        if (is_port_open(sock, server_addr, port)) {
+            printf("Port %d is open\n", port);
+        }
+    }
+
+    close(sock);
+    return 0;
 }
-
-
-
-
-
-
-
